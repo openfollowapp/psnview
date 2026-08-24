@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The OpenFollow Project
+
+[project]
+name = "psnview"
+version = "0.1.0"
+description = "Simple PosiStageNet (PSN) client/server viewer with a Qt GUI"
+license = "AGPL-3.0-or-later"
+readme = "README.md"
+authors = [
+    { name = "The OpenFollow Project" },
+]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "PySide6>=6.6",
+    # Same pure-Python PSN library OpenFollow depends on. Pinned to a rev
+    # at release time for reproducible builds (see RELEASING in README).
+    "pypsn @ git+https://github.com/open-stage/python-psn.git",
+]
+
+[project.scripts]
+psnview = "psnview.__main__:main"
+
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "0.15.18"
+pytest = "^9.1"
+pyinstaller = "^6.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP", "C4", "SIM"]
+ignore = ["SIM105"]  # intentional best-effort teardown, same as OpenFollow
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
