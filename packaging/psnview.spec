@@ -6,9 +6,16 @@
 # macOS:          one-dir build wrapped in PSNView.app (see build-dmg.sh)
 # Windows/Linux:  single self-contained executable (see build-archive.py)
 
+import os
 import sys
 
 ONEFILE = sys.platform != "darwin"
+
+# macOS: when CODESIGN_IDENTITY is set (CI does this), PyInstaller signs every
+# collected binary with the hardened runtime, a secure timestamp and the
+# entitlements below, then signs the .app. Unset -> ad-hoc signature as before.
+CODESIGN_IDENTITY = os.environ.get("CODESIGN_IDENTITY") or None
+ENTITLEMENTS = os.path.join(SPECPATH, "entitlements.plist") if CODESIGN_IDENTITY else None
 
 a = Analysis(
     ["../psnview/__main__.py"],
@@ -58,6 +65,8 @@ else:
         strip=False,
         upx=False,
         console=False,
+        codesign_identity=CODESIGN_IDENTITY,
+        entitlements_file=ENTITLEMENTS,
     )
 
     coll = COLLECT(
@@ -76,6 +85,7 @@ else:
         bundle_identifier="app.openfollow.psnview",
         info_plist={
             "CFBundleShortVersionString": "0.1.0",
+            "CFBundleVersion": "0.1.0",
             "NSHighResolutionCapable": True,
             # PSN is LAN multicast; macOS 15+ prompts for local network access
             "NSLocalNetworkUsageDescription": "PSNView receives PosiStageNet tracker data from devices on your local network.",

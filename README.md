@@ -47,7 +47,8 @@ Grab the build for your platform from the [Releases](../../releases) page.
 
 Good to know:
 
-- The builds are unsigned, so macOS and Windows warn on first launch.
+- The macOS build is signed and notarized. The Windows build is unsigned,
+  so Windows warns on first launch.
 - On first launch macOS asks for **Local Network** access — PSN is LAN
   multicast, so allow it.
 - The Windows and Linux executables unpack themselves on each start, so
@@ -89,8 +90,14 @@ test (Linux inside a bare `ubuntu:22.04` container, see
 `packaging/smoke-test-linux.sh`). To release, bump the version with
 `poetry version` (and `CFBundleShortVersionString` in
 `packaging/psnview.spec`), then push a `v*` tag — CI attaches the builds
-to the GitHub Release. Signed/notarized macOS builds need the Apple
-secrets described in `.github/workflows/ci.yml`.
+to the GitHub Release.
+
+macOS signing happens only in CI. `build-dmg.sh` produces an unsigned DMG
+unless `CODESIGN_IDENTITY` and the `APPLE_NOTARY_*` variables are set (see
+the header of the script); the `build-dmg` workflow job sets them from the
+repository secrets `APPLE_CERT_P12` (base64 `.p12`), `APPLE_CERT_PASSWORD`,
+`APPLE_NOTARY_KEY` (`.p8` contents), `APPLE_NOTARY_KEY_ID` and
+`APPLE_NOTARY_ISSUER`, and skips signing when they are absent (forks).
 
 PSN decoding is done by [pypsn](https://github.com/open-stage/python-psn),
 the same pure-Python library OpenFollow uses.
