@@ -38,11 +38,14 @@ notarize() {
   echo "==> Notarizing $1"
   local args=(--key "${APPLE_NOTARY_KEY_FILE}" --key-id "${APPLE_NOTARY_KEY_ID:?}" --issuer "${APPLE_NOTARY_ISSUER:?}")
   local out id status
-  out="$(xcrun notarytool submit "$1" "${args[@]}" --wait --timeout 30m --output-format json)"
+  # Apple usually answers within minutes, but the queue can take over an hour
+  # (a team's first submissions especially). notarytool exits non-zero on its
+  # own --timeout, so capture instead of letting set -e abort before reporting.
+  out="$(xcrun notarytool submit "$1" "${args[@]}" --wait --timeout 3h --output-format json 2>&1)" || true
   echo "${out}"
-  read -r id status < <(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["id"], d["status"])' <<<"${out}")
+  read -r id status < <(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id", "-"), d.get("status", "Timeout").replace(" ", "_"))' <<<"${out}" 2>/dev/null || echo "- Unparseable")
   if [[ "${status}" != "Accepted" ]]; then
-    xcrun notarytool log "${id}" "${args[@]}" || true
+    if [[ "${id}" != "-" ]]; then xcrun notarytool log "${id}" "${args[@]}" || true; fi
     echo "error: notarization of $1 failed (${status})" >&2
     exit 1
   fi
