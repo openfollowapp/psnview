@@ -34,6 +34,9 @@ before you build a show around it.
   stops updating for more than 2 s.
 - The status bar shows the server name and PSN version, packet rate and
   current frame id.
+- **Send** opens a small test transmitter: edit a few trackers by hand
+  and send them once or stream them at up to 60 Hz, optionally animated
+  — to test PSNView itself or any other PSN receiver.
 
 ## Install
 
@@ -60,10 +63,28 @@ Good to know:
 2. Press **Start**.
 3. Trackers appear as data arrives.
 
+### Send / test mode
+
+**Send** in the toolbar opens a PSN transmitter for testing PSNView
+itself or any other PSN receiver:
+
+1. Pick the interface to send from — `127.0.0.1` feeds a viewer on the
+   same machine (start the receiver on `127.0.0.1` or `0.0.0.0`); a LAN
+   interface reaches other receivers — and the port.
+2. Edit the trackers in the table: id, name, all five vectors, status
+   and timestamp (leave the timestamp blank for `auto`, milliseconds
+   since the sender started). Up to 13 trackers fit in one unfragmented
+   packet.
+3. **Send once** sends one INFO and one DATA packet. **Start** streams
+   DATA at the chosen rate with an INFO packet every second and a
+   wrapping frame id.
+4. **Animate** moves the positions around the edited values while
+   streaming: *Sine* orbits in the XY plane, *Ramp* is a sawtooth on X,
+   with the given amplitude and period.
+
 ## Planned
 
-- Server mode: send INFO/DATA for configurable trackers, with manual
-  sliders and motion generators for console testing.
+- Manual sliders and richer motion generators for the transmitter.
 - 2D stage view, packet logging / CSV export, custom multicast address,
   config save/load.
 
@@ -74,7 +95,7 @@ pipx install poetry
 poetry install
 poetry run psnview             # run from source
 poetry run ruff check .        # lint
-poetry run pytest              # end-to-end test over loopback multicast
+poetry run pytest              # end-to-end tests over loopback multicast
 ```
 
 Prebuilt executables are made with PyInstaller:
@@ -92,7 +113,7 @@ test (Linux inside a bare `ubuntu:22.04` container, see
 to the GitHub Release. Signed/notarized macOS builds need the Apple
 secrets described in `.github/workflows/ci.yml`.
 
-PSN decoding is done by [pypsn](https://github.com/open-stage/python-psn),
+PSN encoding and decoding is done by [pypsn](https://github.com/open-stage/python-psn),
 the same pure-Python library OpenFollow uses.
 
 ## License
