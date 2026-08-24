@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 The OpenFollow Project
-"""PSNView main window: connection toolbar, live tracker table, status bar."""
+"""PSNView main window: connection toolbar, live tracker table, status bar,
+and the Send PSN test dialog."""
 
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from . import __version__
 from .model import TrackerStore, TrackerTableModel
 from .netutils import PSN_DEFAULT_MCAST_IP, PSN_DEFAULT_PORT, list_interface_ips
 from .receiver import PsnReceiver
+from .senddialog import SendDialog
 
 GUI_REFRESH_MS = 66  # ~15 Hz table refresh
 RATE_WINDOW_S = 1.0  # packets/sec averaging window
@@ -39,6 +41,7 @@ class MainWindow(QMainWindow):
         self.receiver.info_received.connect(self._on_info)
         self.receiver.data_received.connect(self._on_data)
         self.receiver.error.connect(self._on_error)
+        self.send_dialog: SendDialog | None = None
 
         self._rate_marker_time = time.monotonic()
         self._rate_marker_count = 0
@@ -84,6 +87,11 @@ class MainWindow(QMainWindow):
         self.clear_action = QAction("Clear", self)
         self.clear_action.triggered.connect(self._on_clear)
         tb.addAction(self.clear_action)
+
+        tb.addSeparator()
+        self.send_action = QAction("Send", self)
+        self.send_action.triggered.connect(self._on_send)
+        tb.addAction(self.send_action)
 
     def _build_table(self) -> None:
         self.table_model = TrackerTableModel(self.store, self)
@@ -141,6 +149,14 @@ class MainWindow(QMainWindow):
         self.store.clear()
         self.table_model.refresh()
 
+    def _on_send(self) -> None:
+        """Open (or raise) the Send PSN test dialog."""
+        if self.send_dialog is None:
+            self.send_dialog = SendDialog(self)
+        self.send_dialog.show()
+        self.send_dialog.raise_()
+        self.send_dialog.activateWindow()
+
     # -- periodic refresh --------------------------------------------------
     def _on_refresh(self) -> None:
         self.table_model.refresh()
@@ -171,4 +187,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._timer.stop()
         self.receiver.stop()
+        if self.send_dialog is not None:
+            self.send_dialog.close()
         super().closeEvent(event)
