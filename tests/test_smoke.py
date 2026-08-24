@@ -62,7 +62,7 @@ def send_packets() -> None:
 
 
 def main() -> int:
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
     win = MainWindow()
     win.show()
 
