@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The OpenFollow Project
+#
+# Ask Apple's notary service about recent submissions. Useful when a
+# release build timed out waiting for notarization: run this to see
+# whether the submission has since been accepted, rejected, or is still
+# in progress. Manual only; uses the same APPLE_NOTARY_* secrets as CI.
+name: Notary status
+
+on:
+  workflow_dispatch:
+    inputs:
+      submission_id:
+        description: Submission ID to show details and log for (optional)
+        required: false
+        default: ""
+
+jobs:
+  status:
+    runs-on: macos-latest
+    steps:
+      - name: Query notary service
+        env:
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+          SUBMISSION_ID: ${{ inputs.submission_id }}
+        run: |
+          set -euo pipefail
+          KEY="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$APPLE_NOTARY_KEY" > "$KEY"
+          trap 'rm -f "$KEY"' EXIT
+          args=(--key "$KEY" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER")
+          echo "==> Recent submissions"
+          xcrun notarytool history "${args[@]}"
+          if [[ -n "$SUBMISSION_ID" ]]; then
+            echo "==> Submission $SUBMISSION_ID"
+            xcrun notarytool info "$SUBMISSION_ID" "${args[@]}"
+            echo "==> Log (only available once processing finished)"
+            xcrun notarytool log "$SUBMISSION_ID" "${args[@]}" || true
+          fi

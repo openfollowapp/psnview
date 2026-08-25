@@ -7,6 +7,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch: # manual run, e.g. to test the signed macOS build
 
 jobs:
   lint:
@@ -42,11 +43,17 @@ jobs:
           QT_QPA_PLATFORM: offscreen
 
   build-dmg:
-    # Build the .app + DMG on every push (artifact); attached to the
-    # GitHub Release by the `release` job when a v* tag is pushed.
+    # Build, sign and notarize the .app + DMG on v* tags (attached to the
+    # GitHub Release by the `release` job) and on manual runs. Signing needs
+    # the APPLE_* repository secrets (see README); without them the build is
+    # unsigned.
     needs: [lint, test]
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
+    env:
+      # `secrets` cannot be referenced in a step `if:`, so hoist presence checks.
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERT_P12 != '' }}
+      HAS_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -54,12 +61,49 @@ jobs:
           python-version: "3.13"
       - run: pipx install poetry
       - run: poetry install
+      - name: Import Developer ID certificate into a temporary keychain
+        if: env.HAS_APPLE_CERT == 'true'
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }} # base64-encoded .p12
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PW="$(openssl rand -hex 16)"
+          CERT="$RUNNER_TEMP/cert.p12"
+          echo -n "$APPLE_CERT_P12" | base64 --decode > "$CERT"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          # Apple's Developer ID intermediate CA; without it the identity is reported as invalid.
+          curl -sSfo "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN"
+          security import "$CERT" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN"
+          rm -f "$CERT"
+          # Sign by the identity's SHA-1 hash: unambiguous and contains no spaces.
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Developer ID Application/ {print $2; exit}')"
+          if [[ -z "$IDENTITY" ]]; then
+            echo "No valid 'Developer ID Application' identity in the imported certificate:"
+            security find-identity -v -p codesigning "$KEYCHAIN"
+            exit 1
+          fi
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+      - name: Prepare notarization credentials
+        if: env.HAS_APPLE_CERT == 'true' && env.HAS_NOTARY_KEY == 'true'
+        env:
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }} # contents of the .p8 file
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+        run: |
+          printf '%s\n' "$APPLE_NOTARY_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "APPLE_NOTARY_KEY_FILE=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+          echo "APPLE_NOTARY_KEY_ID=$APPLE_NOTARY_KEY_ID" >> "$GITHUB_ENV"
+          echo "APPLE_NOTARY_ISSUER=$APPLE_NOTARY_ISSUER" >> "$GITHUB_ENV"
       - name: Build DMG
         run: bash packaging/build-dmg.sh
-        # For signed/notarized releases, import the Developer ID cert into a
-        # temporary keychain here and export CODESIGN_IDENTITY / NOTARY_PROFILE
-        # from repository secrets (APPLE_CERT_P12, APPLE_CERT_PASSWORD,
-        # APPLE_NOTARY_KEY_ID, APPLE_NOTARY_ISSUER, APPLE_NOTARY_KEY).
       - name: Smoke test
         run: |
           ./dist/PSNView.app/Contents/MacOS/PSNView & pid=$!
@@ -70,6 +114,11 @@ jobs:
         with:
           name: PSNView-macos
           path: dist/PSNView-*.dmg
+      - name: Remove signing keychain and API key
+        if: always()
+        run: |
+          if [[ -n "${SIGNING_KEYCHAIN:-}" ]]; then security delete-keychain "$SIGNING_KEYCHAIN"; fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
 
   build-archive:
     # Single-file Windows (.exe) and Linux (.tar.gz) builds. Linux builds on

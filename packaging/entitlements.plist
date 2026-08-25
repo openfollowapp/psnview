@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Copyright (C) 2026 The OpenFollow Project -->
+<!--
+  Hardened-runtime exceptions needed by a PyInstaller-packaged Python/Qt app:
+  CPython (ctypes/libffi) allocates executable memory, and the bundle dlopens
+  its own extension modules and Qt plugins. Applied by psnview.spec when
+  CODESIGN_IDENTITY is set. No network entitlements are needed because the
+  app is not sandboxed.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
