@@ -3,7 +3,7 @@
 
 [project]
 name = "psnview"
-version = "0.1.0"
+version = "0.2.0"
 description = "Simple PosiStageNet (PSN) client/server viewer with a Qt GUI"
 license = "AGPL-3.0-or-later"
 readme = "README.md"

@@ -90,8 +90,8 @@ else:
         icon=ICON,
         bundle_identifier="app.openfollow.psnview",
         info_plist={
-            "CFBundleShortVersionString": "0.1.0",
-            "CFBundleVersion": "0.1.0",
+            "CFBundleShortVersionString": "0.2.0",
+            "CFBundleVersion": "0.2.0",
             "NSHighResolutionCapable": True,
             # PSN is LAN multicast; macOS 15+ prompts for local network access
             "NSLocalNetworkUsageDescription": "PSNView receives PosiStageNet tracker data from devices on your local network.",
