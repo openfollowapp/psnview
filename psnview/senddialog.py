@@ -267,6 +267,7 @@ class SendDialog(QDialog):
         self.port_spin.valueChanged.connect(self._apply_settings)
         self.name_edit.textChanged.connect(self._apply_settings)
         self.animate_check.toggled.connect(self._apply_settings)
+        self.animate_check.toggled.connect(self._on_animate_toggled)
         self.effect_combo.currentTextChanged.connect(self._apply_settings)
         self.amplitude_spin.valueChanged.connect(self._apply_settings)
         self.period_spin.valueChanged.connect(self._apply_settings)
@@ -295,8 +296,10 @@ class SendDialog(QDialog):
         anim.period_s = self.period_spin.value()
         for w in (self.effect_combo, self.amplitude_spin, self.period_spin):
             w.setEnabled(anim.enabled)
-        if not anim.enabled:
-            s.clear_wire_positions()
+
+    def _on_animate_toggled(self, enabled: bool) -> None:
+        if not enabled:
+            self.psn_sender.clear_wire_positions()
             self.model.positions_changed()
 
     def _update_buttons(self, *_args) -> None:
