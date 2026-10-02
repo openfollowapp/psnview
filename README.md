@@ -77,9 +77,10 @@ itself or any other PSN receiver:
    same machine (start the receiver on `127.0.0.1` or `0.0.0.0`); a LAN
    interface reaches other receivers — and the port.
 2. Edit the trackers in the table: id, name, all five vectors, status
-   and timestamp (leave the timestamp blank for `auto`, milliseconds
+   and timestamp (leave the timestamp blank for `auto`, microseconds
    since the sender started). Up to 13 trackers fit in one unfragmented
-   packet.
+   packet; names are capped at 64 bytes so the INFO packet stays small
+   too. A value the wire format cannot hold is refused by the editor.
 3. **Send once** sends one INFO and one DATA packet. **Start** streams
    DATA at the chosen rate with an INFO packet every second and a
    wrapping frame id.

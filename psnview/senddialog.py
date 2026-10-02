@@ -5,7 +5,9 @@ trackers once or stream them, for testing PSNView and other receivers."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+import math
+
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -21,21 +23,41 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .model import COLUMNS
+from .model import (
+    COL_AGE,
+    COL_ID,
+    COL_NAME,
+    COL_STATUS,
+    COL_TIMESTAMP,
+    COL_V3_FIRST,
+    COLUMNS,
+    GUI_REFRESH_MS,
+    vector_column,
+)
 from .netutils import PSN_DEFAULT_MCAST_IP, PSN_DEFAULT_PORT, list_interface_ips
 from .sender import (
     DEFAULT_RATE_HZ,
     EFFECTS,
+    FLOAT32_MAX,
+    MAX_NAME_BYTES,
     MAX_RATE_HZ,
+    MAX_TIMESTAMP,
+    MAX_TRACKER_ID,
     MAX_TRACKERS_PER_PACKET,
-    V3_FIELDS,
     PsnSender,
     SendTracker,
 )
 
-SEND_COLUMNS = COLUMNS[:-1]  # same layout as the viewer, minus "Age (s)"
-COL_ID, COL_NAME, COL_STATUS, COL_TIMESTAMP = 0, 1, 17, 18
-COL_POS_X, COL_POS_Z = 2, 4
+SEND_COLUMNS = COLUMNS[:COL_AGE]  # same layout as the viewer, minus "Age (s)"
+COL_POS_X, COL_POS_Z = COL_V3_FIRST, COL_V3_FIRST + 2
+
+
+def _wire_float(text: str) -> float:
+    """Parse a float the float32 wire format can hold; ValueError otherwise."""
+    value = float(text)
+    if not math.isfinite(value) or abs(value) > FLOAT32_MAX:
+        raise ValueError(f"{text} does not fit a 32-bit float")
+    return value
 
 
 class SendTrackerTableModel(QAbstractTableModel):
@@ -49,7 +71,8 @@ class SendTrackerTableModel(QAbstractTableModel):
     def add_tracker(self) -> bool:
         if len(self.rows) >= MAX_TRACKERS_PER_PACKET:
             return False
-        tracker_id = max((t.tracker_id for t in self.rows), default=0) + 1
+        used = {t.tracker_id for t in self.rows}
+        tracker_id = next(i for i in range(1, MAX_TRACKER_ID + 1) if i not in used)
         row = len(self.rows)
         self.beginInsertRows(QModelIndex(), row, row)
         self.rows.append(SendTracker(tracker_id, f"tracker_{tracker_id}"))
@@ -96,13 +119,13 @@ class SendTrackerTableModel(QAbstractTableModel):
             return str(t.tracker_id)
         if col == COL_NAME:
             return t.name
-        if 2 <= col <= 16:  # 5 vectors x 3 axes
-            vec_idx, axis = divmod(col - 2, 3)
-            vec = getattr(t, V3_FIELDS[vec_idx])
+        if (field_axis := vector_column(col)) is not None:
+            fname, axis = field_axis
+            vec = getattr(t, fname)
             if editing:
                 return repr(vec[axis])
             # The table shows what went on the wire; the editor keeps the base position.
-            if vec_idx == 0 and t.wire_pos is not None:
+            if fname == "pos" and t.wire_pos is not None:
                 vec = t.wire_pos
             return f"{vec[axis]:.3f}"
         if col == COL_STATUS:
@@ -122,25 +145,27 @@ class SendTrackerTableModel(QAbstractTableModel):
         try:
             if col == COL_ID:
                 tracker_id = int(text)
-                if not 0 <= tracker_id <= 0xFFFF:  # uint16 on the wire
+                others = {o.tracker_id for o in self.rows if o is not t}
+                if not 0 <= tracker_id <= MAX_TRACKER_ID or tracker_id in others:
                     return False
                 t.tracker_id = tracker_id
             elif col == COL_NAME:
+                if len(text.encode("utf-8")) > MAX_NAME_BYTES:
+                    return False
                 t.name = text
-            elif 2 <= col <= 16:
-                vec_idx, axis = divmod(col - 2, 3)
-                fname = V3_FIELDS[vec_idx]
+            elif (field_axis := vector_column(col)) is not None:
+                fname, axis = field_axis
                 vec = list(getattr(t, fname))
-                vec[axis] = float(text)
+                vec[axis] = _wire_float(text)
                 setattr(t, fname, tuple(vec))
             elif col == COL_STATUS:
-                t.status = float(text)
+                t.status = _wire_float(text)
             elif col == COL_TIMESTAMP:
                 if text in ("", "auto"):
                     t.timestamp = None
                 else:
                     timestamp = int(text)
-                    if timestamp < 0:
+                    if not 0 <= timestamp <= MAX_TIMESTAMP:
                         return False
                     t.timestamp = timestamp
             else:
@@ -163,6 +188,10 @@ class SendDialog(QDialog):
         # Not "self.sender": QObject.sender() is a method.
         self.psn_sender = PsnSender(self)
         self.model = SendTrackerTableModel(self.psn_sender.trackers, self)
+        # The table follows the stream at the viewer's rate, not at the send rate.
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(GUI_REFRESH_MS)
+        self._refresh_timer.timeout.connect(self.model.positions_changed)
 
         layout = QVBoxLayout(self)
         layout.addLayout(self._build_connection_row())
@@ -197,6 +226,7 @@ class SendDialog(QDialog):
 
         row.addWidget(QLabel("  System name:"))
         self.name_edit = QLineEdit("PSNView")
+        self.name_edit.setMaxLength(MAX_NAME_BYTES)
         row.addWidget(self.name_edit, 1)
         return row
 
@@ -278,9 +308,8 @@ class SendDialog(QDialog):
         self.start_button.clicked.connect(self._on_start_stop)
 
         self.model.rowsInserted.connect(self._update_buttons)
-        self.model.rowsRemoved.connect(self._update_buttons)
+        self.model.rowsRemoved.connect(self._on_rows_removed)
         self.psn_sender.sent.connect(self._on_sent)
-        self.psn_sender.sent.connect(self.model.positions_changed)
         self.psn_sender.error.connect(self._on_error)
 
     # -- settings ----------------------------------------------------------
@@ -288,7 +317,7 @@ class SendDialog(QDialog):
         s = self.psn_sender
         s.iface_ip = self.iface_combo.currentText()
         s.port = self.port_spin.value()
-        s.system_name = self.name_edit.text()
+        s.system_name = self.name_edit.text().encode("utf-8")[:MAX_NAME_BYTES].decode("utf-8", "ignore")
         anim = s.animation
         anim.enabled = self.animate_check.isChecked()
         anim.effect = self.effect_combo.currentText()
@@ -305,14 +334,29 @@ class SendDialog(QDialog):
     def _update_buttons(self, *_args) -> None:
         has_rows = self.model.rowCount() > 0
         self.send_once_button.setEnabled(has_rows)
-        self.start_button.setEnabled(has_rows or self.psn_sender.running)
+        self.start_button.setEnabled(has_rows)
         self.add_button.setEnabled(self.model.rowCount() < MAX_TRACKERS_PER_PACKET)
         self.remove_button.setEnabled(has_rows)
+
+    def _on_rows_removed(self, *_args) -> None:
+        self._update_buttons()
+        if self.model.rowCount() == 0 and self.psn_sender.running:
+            self._stop_streaming("Stopped - no trackers")
 
     def _set_streaming_ui(self, streaming: bool) -> None:
         self.start_button.setText("Stop" if streaming else "Start")
         for w in (self.iface_combo, self.port_spin, self.rate_spin):
             w.setEnabled(not streaming)
+        if streaming:
+            self._refresh_timer.start()
+        else:
+            self._refresh_timer.stop()
+            self.model.positions_changed()
+
+    def _stop_streaming(self, status: str) -> None:
+        self.psn_sender.stop()
+        self._set_streaming_ui(False)
+        self.status_label.setText(status)
 
     # -- actions -----------------------------------------------------------
     def _on_add(self) -> None:
@@ -329,9 +373,7 @@ class SendDialog(QDialog):
     def _on_start_stop(self) -> None:
         s = self.psn_sender
         if s.running:
-            s.stop()
-            self._set_streaming_ui(False)
-            self.status_label.setText("Stopped")
+            self._stop_streaming("Stopped")
         elif s.start(self.rate_spin.value()):
             self._set_streaming_ui(True)
             self.status_label.setText(f"Streaming {self.rate_spin.value()} Hz")
@@ -344,14 +386,15 @@ class SendDialog(QDialog):
             self.status_label.setText(f"Streaming {self.rate_spin.value()} Hz - frame {frame_id} - {total} pkts")
         else:
             self.status_label.setText(f"Sent once - frame {frame_id} - {total} pkts")
+            self.model.positions_changed()
 
     def _on_error(self, message: str) -> None:
-        self.status_label.setText(f"Error: {message}")
         if not self.psn_sender.running:
             self._set_streaming_ui(False)
+        self.status_label.setText(f"Error: {message}")
 
     # -- shutdown ----------------------------------------------------------
     def closeEvent(self, event) -> None:
-        self.psn_sender.stop()
-        self._set_streaming_ui(False)
+        if self.psn_sender.running:
+            self._stop_streaming("Stopped")
         super().closeEvent(event)

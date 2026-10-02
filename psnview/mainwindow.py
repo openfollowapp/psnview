@@ -20,12 +20,11 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
-from .model import TrackerStore, TrackerTableModel
+from .model import GUI_REFRESH_MS, TrackerStore, TrackerTableModel
 from .netutils import PSN_DEFAULT_MCAST_IP, PSN_DEFAULT_PORT, list_interface_ips
 from .receiver import PsnReceiver
 from .senddialog import SendDialog
 
-GUI_REFRESH_MS = 66  # ~15 Hz table refresh
 RATE_WINDOW_S = 1.0  # packets/sec averaging window
 NO_DATA_AFTER_S = 2.0  # "no data" indicator threshold
 

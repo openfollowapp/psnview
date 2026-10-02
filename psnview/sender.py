@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import math
 import socket
+import struct
 import time
 from dataclasses import dataclass
 
@@ -25,7 +26,6 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from .netutils import PSN_DEFAULT_MCAST_IP, PSN_DEFAULT_PORT
 
-V3_FIELDS = ("pos", "speed", "ori", "accel", "trgtpos")
 PSN_VERSION_HIGH = 2
 PSN_VERSION_LOW = 3
 DEFAULT_RATE_HZ = 30
@@ -34,6 +34,12 @@ INFO_INTERVAL_S = 1.0
 # pypsn emits 104 bytes per tracker after a 20-byte header and does not
 # fragment: 13 trackers = 1372 bytes, 14 would exceed a 1500-byte MTU.
 MAX_TRACKERS_PER_PACKET = 13
+# INFO carries the names: 28 bytes, plus 8 per tracker and the UTF-8 names.
+# 13 names and the system name at this cap stay near 1 kB.
+MAX_NAME_BYTES = 64
+MAX_TRACKER_ID = 0xFFFF  # uint16 on the wire
+MAX_TIMESTAMP = 2**64 - 1  # uint64 on the wire
+FLOAT32_MAX = 3.4028234663852886e38  # vectors and status are float32 on the wire
 EFFECTS = ("Sine", "Ramp")
 
 Vec3 = tuple[float, float, float]
@@ -50,14 +56,14 @@ class SendTracker:
     accel: Vec3 = ZERO
     trgtpos: Vec3 = ZERO
     status: float = 1.0
-    timestamp: int | None = None  # None = automatic (ms since sender start)
+    timestamp: int | None = None  # None = automatic (microseconds since sender start)
     # Position last put on the wire while animated; None when pos was sent as edited.
     wire_pos: Vec3 | None = None
 
     def to_psn_info(self) -> pypsn.PsnTrackerInfo:
         return pypsn.PsnTrackerInfo(tracker_id=self.tracker_id, tracker_name=self.name)
 
-    def to_psn_data(self, now_ms: int, pos: Vec3 | None = None) -> pypsn.PsnTracker:
+    def to_psn_data(self, now_us: int, pos: Vec3 | None = None) -> pypsn.PsnTracker:
         """Build the pypsn tracker; the encoder needs every vector set, so zeros are wrapped here."""
         return pypsn.PsnTracker(
             tracker_id=self.tracker_id,
@@ -67,7 +73,7 @@ class SendTracker:
             accel=pypsn.PsnVector3(*self.accel),
             trgtpos=pypsn.PsnVector3(*self.trgtpos),
             status=self.status,
-            timestamp=self.timestamp if self.timestamp is not None else now_ms,
+            timestamp=self.timestamp if self.timestamp is not None else now_us,
         )
 
 
@@ -157,7 +163,7 @@ class PsnSender(QObject):
         try:
             frame = self._next_frame()
             t = time.monotonic() - self._t0
-            ok = self._send(self._build_info_bytes(frame), info=True) and self._send(self._build_data_bytes(frame, t))
+            ok = self._send_info(frame) and self._send_data(frame, t)
         finally:
             if temporary:
                 self._close_socket()
@@ -211,9 +217,26 @@ class PsnSender(QObject):
             self.data_packet_count += 1
         return True
 
+    def _send_info(self, frame_id: int) -> bool:
+        data = self._encode(self._build_info_bytes, frame_id)
+        return data is not None and self._send(data, info=True)
+
+    def _send_data(self, frame_id: int, t_s: float) -> bool:
+        data = self._encode(self._build_data_bytes, frame_id, t_s)
+        return data is not None and self._send(data)
+
+    def _encode(self, build, *args) -> bytes | None:
+        """Run a packet builder; a value the wire format cannot hold stops the stream instead of raising."""
+        try:
+            return build(*args)
+        except (struct.error, OverflowError) as exc:
+            self.stop()
+            self.error.emit(f"Cannot encode packet: {exc}")
+            return None
+
     # -- packet building ---------------------------------------------------
-    def _now_ms(self) -> int:
-        return int((time.monotonic() - self._t0) * 1000)
+    def _now_us(self) -> int:
+        return int((time.monotonic() - self._t0) * 1_000_000)
 
     def _next_frame(self) -> int:
         frame = self.frame_id
@@ -222,7 +245,7 @@ class PsnSender(QObject):
 
     def _make_info(self, frame_id: int) -> pypsn.PsnInfo:
         return pypsn.PsnInfo(
-            timestamp=self._now_ms(),
+            timestamp=self._now_us(),
             version_high=PSN_VERSION_HIGH,
             version_low=PSN_VERSION_LOW,
             frame_id=frame_id,
@@ -239,13 +262,13 @@ class PsnSender(QObject):
 
     def _build_data_bytes(self, frame_id: int, t_s: float) -> bytes:
         rows = self.trackers[:MAX_TRACKERS_PER_PACKET]
-        now_ms = self._now_ms()
+        now_us = self._now_us()
         animated = self.animation.enabled
         trackers = []
         for i, t in enumerate(rows):
             pos = animate_position(t.pos, self.animation, t_s, i / len(rows))
             t.wire_pos = pos if animated else None
-            trackers.append(t.to_psn_data(now_ms, pos))
+            trackers.append(t.to_psn_data(now_us, pos))
         packet = pypsn.PsnDataPacket(info=self._make_info(frame_id), trackers=trackers)
         return pypsn.prepare_psn_data_packet_bytes(packet)
 
@@ -257,7 +280,7 @@ class PsnSender(QObject):
         t = time.monotonic() - self._t0
         if t - self._last_info_t >= INFO_INTERVAL_S:
             self._last_info_t = t
-            if not self._send(self._build_info_bytes(frame), info=True):
+            if not self._send_info(frame):
                 return
-        if self._send(self._build_data_bytes(frame, t)):
+        if self._send_data(frame, t):
             self.sent.emit(frame)

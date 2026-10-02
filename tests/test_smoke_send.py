@@ -18,7 +18,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from psnview.mainwindow import MainWindow
-from psnview.senddialog import COL_POS_X, SendTrackerTableModel
+from psnview.model import COL_ID, COL_NAME, COL_STATUS, COL_TIMESTAMP
+from psnview.senddialog import COL_POS_X, SendDialog, SendTrackerTableModel
 from psnview.sender import Animation, PsnSender, SendTracker, animate_position
 
 IFACE_IP = "127.0.0.1"
@@ -42,7 +43,7 @@ def test_tracker_roundtrip():
     t8 = SendTracker(8, timestamp=5)
     packet = pypsn.PsnDataPacket(
         info=pypsn.PsnInfo(timestamp=0, version_high=2, version_low=3, frame_id=9, packet_count=1),
-        trackers=[t7.to_psn_data(now_ms=42), t8.to_psn_data(now_ms=42)],
+        trackers=[t7.to_psn_data(now_us=42), t8.to_psn_data(now_us=42)],
     )
     parsed = pypsn.parse_psn_packet(pypsn.prepare_psn_data_packet_bytes(packet))
     assert isinstance(parsed, pypsn.PsnDataPacket)
@@ -82,6 +83,55 @@ def test_table_shows_wire_position_but_edits_base():
 
     tracker.wire_pos = None
     assert model.data(idx) == "3.000"
+
+
+@pytest.mark.parametrize(
+    ("col", "text"),
+    [
+        (COL_POS_X, "1e39"),  # beyond float32
+        (COL_POS_X, "inf"),
+        (COL_POS_X, "nan"),
+        (COL_POS_X, "abc"),
+        (COL_STATUS, "1e400"),
+        (COL_TIMESTAMP, str(2**64)),  # beyond uint64
+        (COL_TIMESTAMP, "-1"),
+        (COL_ID, "65536"),  # beyond uint16
+        (COL_ID, "-1"),
+        (COL_NAME, "x" * 65),
+        (COL_NAME, "\u00e4" * 33),  # 66 UTF-8 bytes
+    ],
+)
+def test_editor_refuses_values_the_wire_cannot_hold(col, text):
+    QApplication.instance() or QApplication(sys.argv)
+    tracker = SendTracker(1, "one", pos=(1.0, 2.0, 3.0), timestamp=5)
+    model = SendTrackerTableModel([tracker])
+    before = (tracker.tracker_id, tracker.name, tracker.pos, tracker.status, tracker.timestamp)
+    assert not model.setData(model.index(0, col), text)
+    assert (tracker.tracker_id, tracker.name, tracker.pos, tracker.status, tracker.timestamp) == before
+
+
+def test_editor_accepts_wire_limits():
+    QApplication.instance() or QApplication(sys.argv)
+    tracker = SendTracker(1)
+    model = SendTrackerTableModel([tracker])
+    assert model.setData(model.index(0, COL_POS_X), "3.4e38")
+    assert model.setData(model.index(0, COL_TIMESTAMP), str(2**64 - 1))
+    assert model.setData(model.index(0, COL_ID), "65535")
+    assert model.setData(model.index(0, COL_NAME), "\u00e4" * 32)  # 64 UTF-8 bytes
+    assert model.setData(model.index(0, COL_TIMESTAMP), "auto")
+    assert tracker.timestamp is None
+
+
+def test_tracker_ids_stay_unique_and_within_uint16():
+    QApplication.instance() or QApplication(sys.argv)
+    model = SendTrackerTableModel([])
+    assert model.add_tracker() and model.add_tracker()
+    assert [t.tracker_id for t in model.rows] == [1, 2]
+    assert not model.setData(model.index(0, COL_ID), "2")  # taken by the other row
+    assert model.setData(model.index(0, COL_ID), "65535")
+    assert model.add_tracker()
+    ids = [t.tracker_id for t in model.rows]
+    assert len(set(ids)) == 3 and max(ids) <= 65535, ids
 
 
 def _pump(app, seconds: float, until) -> bool:
@@ -140,6 +190,7 @@ def test_send_dialog_feeds_viewer_over_loopback():
     assert t2.name == "tracker_2", t2.name
     assert abs(t2.vectors["pos"][0] - 2.5) <= 1.0 + 1e-3, t2.vectors["pos"]  # sine orbit, amplitude 1
     assert t2.status == 1
+    assert t2.timestamp >= 50_000, t2.timestamp  # microseconds since the sender started
     assert isinstance(store.last_frame_id, int)
 
     # send once
@@ -151,3 +202,56 @@ def test_send_dialog_feeds_viewer_over_loopback():
     win._on_start_stop()
     assert not win.receiver.running
     win.close()
+
+
+def test_unencodable_value_stops_the_stream_with_a_report():
+    app = QApplication.instance() or QApplication(sys.argv)
+    sender = PsnSender()
+    errors: list[str] = []
+    sender.error.connect(errors.append)
+    sender.trackers.append(SendTracker(1, "one"))
+    sender.trackers[0].pos = (1e39, 0.0, 0.0)  # past the editor, as a future input path might
+    assert not sender.send_once()
+    assert errors and errors[-1].startswith("Cannot encode"), errors
+
+    errors.clear()
+    assert sender.start(30)
+    assert _pump(app, 5.0, lambda: not sender.running), "stream kept running on an unencodable packet"
+    assert errors and errors[-1].startswith("Cannot encode"), errors
+
+
+def test_removing_every_tracker_stops_the_stream():
+    app = QApplication.instance() or QApplication(sys.argv)
+    dlg = SendDialog()
+    dlg.iface_combo.setCurrentText(IFACE_IP)
+    dlg._on_start_stop()
+    assert dlg.psn_sender.running, dlg.status_label.text()
+    assert _pump(app, 5.0, lambda: dlg.psn_sender.data_packet_count > 0)
+
+    dlg._on_remove()
+    assert dlg.model.rowCount() == 0
+    assert not dlg.psn_sender.running
+    assert dlg.start_button.text() == "Start"
+    assert not dlg.start_button.isEnabled()
+    assert dlg.status_label.text() == "Stopped - no trackers"
+    dlg.close()
+
+
+def test_closing_the_dialog_while_streaming_reports_stopped():
+    app = QApplication.instance() or QApplication(sys.argv)
+    dlg = SendDialog()
+    dlg.iface_combo.setCurrentText(IFACE_IP)
+    dlg._on_start_stop()
+    assert _pump(app, 5.0, lambda: dlg.status_label.text().startswith("Streaming"))
+    dlg.close()
+    assert not dlg.psn_sender.running
+    assert dlg.start_button.text() == "Start"
+    assert dlg.status_label.text() == "Stopped"
+
+
+def test_system_name_is_capped_in_bytes():
+    QApplication.instance() or QApplication(sys.argv)
+    dlg = SendDialog()
+    dlg.name_edit.setText("\u00e4" * 64)  # 64 characters, 128 UTF-8 bytes
+    assert len(dlg.psn_sender.system_name.encode("utf-8")) == 64
+    dlg.close()

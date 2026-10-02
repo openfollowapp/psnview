@@ -16,21 +16,34 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor
 
 STALE_AFTER_S = 2.0
+GUI_REFRESH_MS = 66  # ~15 Hz table refresh
 
-_V3_FIELDS = ("pos", "speed", "ori", "accel", "trgtpos")
+V3_FIELDS = ("pos", "speed", "ori", "accel", "trgtpos")
+_V3_LABELS = ("Pos", "Speed", "Ori", "Accel", "Target")
 
+# Column layout, shared by the viewer and the send table.
+COL_ID, COL_NAME, COL_V3_FIRST = 0, 1, 2
+COL_STATUS = COL_V3_FIRST + 3 * len(V3_FIELDS)
+COL_TIMESTAMP = COL_STATUS + 1
+COL_AGE = COL_TIMESTAMP + 1
 COLUMNS: list[str] = (
-    ["ID", "Name"]
-    + [f"{label} {axis}" for label in ("Pos", "Speed", "Ori", "Accel", "Target") for axis in "XYZ"]
-    + ["Status", "Timestamp", "Age (s)"]
+    ["ID", "Name"] + [f"{label} {axis}" for label in _V3_LABELS for axis in "XYZ"] + ["Status", "Timestamp", "Age (s)"]
 )
+
+
+def vector_column(col: int) -> tuple[str, int] | None:
+    """(vector field, axis) for a vector column, None for any other column."""
+    if COL_V3_FIRST <= col < COL_STATUS:
+        vec_idx, axis = divmod(col - COL_V3_FIRST, 3)
+        return V3_FIELDS[vec_idx], axis
+    return None
 
 
 @dataclass
 class TrackerState:
     tracker_id: int
     name: str = ""
-    vectors: dict[str, tuple[float, float, float] | None] = field(default_factory=lambda: dict.fromkeys(_V3_FIELDS))
+    vectors: dict[str, tuple[float, float, float] | None] = field(default_factory=lambda: dict.fromkeys(V3_FIELDS))
     status: float | None = None
     timestamp: int | None = None
     last_seen: float = 0.0  # monotonic time of last DATA update
@@ -87,7 +100,7 @@ class TrackerStore:
         self.last_frame_id = packet.info.frame_id
         for t in packet.trackers:
             state = self._get(t.tracker_id)
-            for fname in _V3_FIELDS:
+            for fname in V3_FIELDS:
                 vec = getattr(t, fname, None)
                 if vec is not None:
                     state.vectors[fname] = (vec.x, vec.y, vec.z)
@@ -157,21 +170,20 @@ class TrackerTableModel(QAbstractTableModel):
         if role != Qt.ItemDataRole.DisplayRole:
             return None
 
-        if col == 0:
+        if col == COL_ID:
             return str(state.tracker_id)
-        if col == 1:
+        if col == COL_NAME:
             return state.name
-        if 2 <= col <= 16:  # 5 vectors x 3 axes
-            vec_idx, axis = divmod(col - 2, 3)
-            vec = state.vectors[_V3_FIELDS[vec_idx]]
+        if (field_axis := vector_column(col)) is not None:
+            vec = state.vectors[field_axis[0]]
             if vec is None:
                 return "-"
-            return f"{vec[axis]:.3f}"
-        if col == 17:
+            return f"{vec[field_axis[1]]:.3f}"
+        if col == COL_STATUS:
             return "-" if state.status is None else f"{state.status:g}"
-        if col == 18:
+        if col == COL_TIMESTAMP:
             return "-" if state.timestamp is None else str(state.timestamp)
-        if col == 19:
+        if col == COL_AGE:
             a = state.age(self._now)
             return "-" if a is None else f"{a:.1f}"
         return None
