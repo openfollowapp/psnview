@@ -12,10 +12,12 @@ def main() -> int:
 
     # Absolute import: PyInstaller runs this file as a top-level script,
     # where relative imports have no parent package.
+    from psnview.icon import app_icon
     from psnview.mainwindow import MainWindow
 
     app = QApplication(sys.argv)
     app.setApplicationName("PSNView")
+    app.setWindowIcon(app_icon())
     window = MainWindow()
     window.show()
     return app.exec()

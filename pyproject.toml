@@ -29,6 +29,7 @@ build-backend = "poetry.core.masonry.api"
 ruff = "0.15.18"
 pytest = "^9.1"
 pyinstaller = "^6.11"
+pillow = ">=10"
 
 [tool.ruff]
 line-length = 120
