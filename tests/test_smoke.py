@@ -62,7 +62,8 @@ def send_packets() -> None:
 
 
 def main() -> int:
-    app = QApplication(sys.argv)
+    # One QApplication per process: an earlier test may already own it.
+    app = QApplication.instance() or QApplication(sys.argv)
     win = MainWindow()
     win.show()
 

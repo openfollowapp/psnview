@@ -17,11 +17,16 @@ ONEFILE = sys.platform != "darwin"
 CODESIGN_IDENTITY = os.environ.get("CODESIGN_IDENTITY") or None
 ENTITLEMENTS = os.path.join(SPECPATH, "entitlements.plist") if CODESIGN_IDENTITY else None
 
+# One PNG serves every platform: PyInstaller converts it to .icns / .ico with
+# Pillow at build time. The same file is the window icon at runtime.
+ASSETS = os.path.join(SPECPATH, "..", "psnview", "assets")
+ICON = os.path.join(ASSETS, "icon.png")
+
 a = Analysis(
     ["../psnview/__main__.py"],
     pathex=[".."],
     binaries=[],
-    datas=[],
+    datas=[(ASSETS, "psnview/assets")],
     hiddenimports=["psnview.mainwindow"],
     hookspath=[],
     runtime_hooks=[],
@@ -53,6 +58,7 @@ if ONEFILE:
         strip=False,
         upx=False,
         console=False,
+        icon=ICON if sys.platform == "win32" else None,
     )
 else:
     exe = EXE(
@@ -81,7 +87,7 @@ else:
     app = BUNDLE(
         coll,
         name="PSNView.app",
-        icon=None,  # add packaging/psnview.icns here once we have artwork
+        icon=ICON,
         bundle_identifier="app.openfollow.psnview",
         info_plist={
             "CFBundleShortVersionString": "0.1.0",

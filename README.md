@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="psnview/assets/icon.svg" alt="PSNView" width="128" />
+</p>
+
 <h1 align="center">PSNView</h1>
 
 <p align="center">
@@ -98,6 +102,11 @@ the header of the script); the `build-dmg` workflow job sets them from the
 repository secrets `APPLE_CERT_P12` (base64 `.p12`), `APPLE_CERT_PASSWORD`,
 `APPLE_NOTARY_KEY` (`.p8` contents), `APPLE_NOTARY_KEY_ID` and
 `APPLE_NOTARY_ISSUER`, and skips signing when they are absent (forks).
+
+The app icon lives in `psnview/assets/` (`icon.svg` is the source,
+`icon.png` the export the app and the builds use). PyInstaller turns the
+PNG into the `.icns` / `.ico` at build time, so no generated icon files
+are checked in.
 
 PSN decoding is done by [pypsn](https://github.com/open-stage/python-psn),
 the same pure-Python library OpenFollow uses.
