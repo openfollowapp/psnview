@@ -16,6 +16,7 @@ dependencies = [
     # Same pure-Python PSN library OpenFollow depends on. Pinned to a rev
     # at release time for reproducible builds (see RELEASING in README).
     "pypsn @ git+https://github.com/open-stage/python-psn.git",
+    "multicast-expert (>=1.5)",
 ]
 
 [project.scripts]
