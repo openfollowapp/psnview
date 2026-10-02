@@ -35,6 +35,7 @@ from .sender import (
 
 SEND_COLUMNS = COLUMNS[:-1]  # same layout as the viewer, minus "Age (s)"
 COL_ID, COL_NAME, COL_STATUS, COL_TIMESTAMP = 0, 1, 17, 18
+COL_POS_X, COL_POS_Z = 2, 4
 
 
 class SendTrackerTableModel(QAbstractTableModel):
@@ -61,6 +62,11 @@ class SendTrackerTableModel(QAbstractTableModel):
         self.beginRemoveRows(QModelIndex(), row, row)
         del self.rows[row]
         self.endRemoveRows()
+
+    def positions_changed(self) -> None:
+        """Redraw the Pos columns after a send moved the wire positions."""
+        if self.rows:
+            self.dataChanged.emit(self.index(0, COL_POS_X), self.index(len(self.rows) - 1, COL_POS_Z))
 
     # -- Qt model API ------------------------------------------------------
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
@@ -92,8 +98,13 @@ class SendTrackerTableModel(QAbstractTableModel):
             return t.name
         if 2 <= col <= 16:  # 5 vectors x 3 axes
             vec_idx, axis = divmod(col - 2, 3)
-            value = getattr(t, V3_FIELDS[vec_idx])[axis]
-            return repr(value) if editing else f"{value:.3f}"
+            vec = getattr(t, V3_FIELDS[vec_idx])
+            if editing:
+                return repr(vec[axis])
+            # The table shows what went on the wire; the editor keeps the base position.
+            if vec_idx == 0 and t.wire_pos is not None:
+                vec = t.wire_pos
+            return f"{vec[axis]:.3f}"
         if col == COL_STATUS:
             return repr(t.status) if editing else f"{t.status:g}"
         if col == COL_TIMESTAMP:
@@ -268,6 +279,7 @@ class SendDialog(QDialog):
         self.model.rowsInserted.connect(self._update_buttons)
         self.model.rowsRemoved.connect(self._update_buttons)
         self.psn_sender.sent.connect(self._on_sent)
+        self.psn_sender.sent.connect(self.model.positions_changed)
         self.psn_sender.error.connect(self._on_error)
 
     # -- settings ----------------------------------------------------------
@@ -283,6 +295,9 @@ class SendDialog(QDialog):
         anim.period_s = self.period_spin.value()
         for w in (self.effect_combo, self.amplitude_spin, self.period_spin):
             w.setEnabled(anim.enabled)
+        if not anim.enabled:
+            s.clear_wire_positions()
+            self.model.positions_changed()
 
     def _update_buttons(self, *_args) -> None:
         has_rows = self.model.rowCount() > 0

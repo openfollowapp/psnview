@@ -51,6 +51,8 @@ class SendTracker:
     trgtpos: Vec3 = ZERO
     status: float = 1.0
     timestamp: int | None = None  # None = automatic (ms since sender start)
+    # Position last put on the wire while animated; None when pos was sent as edited.
+    wire_pos: Vec3 | None = None
 
     def to_psn_info(self) -> pypsn.PsnTrackerInfo:
         return pypsn.PsnTrackerInfo(tracker_id=self.tracker_id, tracker_name=self.name)
@@ -140,6 +142,10 @@ class PsnSender(QObject):
     def stop(self) -> None:
         self._timer.stop()
         self._close_socket()
+
+    def clear_wire_positions(self) -> None:
+        for t in self.trackers:
+            t.wire_pos = None
 
     def send_once(self) -> bool:
         """Send one INFO and one DATA packet (temporary socket unless streaming)."""
@@ -234,10 +240,12 @@ class PsnSender(QObject):
     def _build_data_bytes(self, frame_id: int, t_s: float) -> bytes:
         rows = self.trackers[:MAX_TRACKERS_PER_PACKET]
         now_ms = self._now_ms()
-        trackers = [
-            t.to_psn_data(now_ms, animate_position(t.pos, self.animation, t_s, i / len(rows)))
-            for i, t in enumerate(rows)
-        ]
+        animated = self.animation.enabled
+        trackers = []
+        for i, t in enumerate(rows):
+            pos = animate_position(t.pos, self.animation, t_s, i / len(rows))
+            t.wire_pos = pos if animated else None
+            trackers.append(t.to_psn_data(now_ms, pos))
         packet = pypsn.PsnDataPacket(info=self._make_info(frame_id), trackers=trackers)
         return pypsn.prepare_psn_data_packet_bytes(packet)
 

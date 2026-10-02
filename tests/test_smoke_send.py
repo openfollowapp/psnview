@@ -14,9 +14,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pypsn
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from psnview.mainwindow import MainWindow
+from psnview.senddialog import COL_POS_X, SendTrackerTableModel
 from psnview.sender import Animation, PsnSender, SendTracker, animate_position
 
 IFACE_IP = "127.0.0.1"
@@ -63,6 +65,25 @@ def test_frame_wrap():
     assert s._next_frame() == 0
 
 
+def test_table_shows_wire_position_but_edits_base():
+    QApplication.instance() or QApplication(sys.argv)
+    tracker = SendTracker(1, pos=(2.5, 0.0, 0.0))
+    model = SendTrackerTableModel([tracker])
+    idx = model.index(0, COL_POS_X)
+    assert model.data(idx) == "2.500"
+
+    tracker.wire_pos = (1.5, 0.0, 0.0)
+    assert model.data(idx) == "1.500"
+    assert model.data(idx, Qt.ItemDataRole.EditRole) == "2.5"
+
+    assert model.setData(idx, "3.0")
+    assert tracker.pos == (3.0, 0.0, 0.0)
+    assert model.data(idx) == "1.500"  # until the next send moves it
+
+    tracker.wire_pos = None
+    assert model.data(idx) == "3.000"
+
+
 def _pump(app, seconds: float, until) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline and not until():
@@ -100,6 +121,16 @@ def test_send_dialog_feeds_viewer_over_loopback():
     )
     dlg._on_start_stop()
     assert not dlg.psn_sender.running
+
+    # the dialog table follows the animated position, the editor keeps the base
+    pos_x = dlg.model.index(1, COL_POS_X)
+    wire = dlg.psn_sender.trackers[1].wire_pos
+    assert wire is not None and abs(wire[0] - 2.5) <= 1.0 + 1e-3, wire
+    assert dlg.model.data(pos_x) == f"{wire[0]:.3f}"
+    assert dlg.model.data(pos_x, Qt.ItemDataRole.EditRole) == "2.5"
+    dlg.animate_check.setChecked(False)
+    assert dlg.model.data(pos_x) == "2.500"
+    dlg.animate_check.setChecked(True)
 
     win.table_model.refresh()
     assert store.server_name == "psnview_send_test", store.server_name
